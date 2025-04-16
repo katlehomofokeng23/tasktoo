@@ -1,15 +1,21 @@
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.parsers.DocumentBuilder;
-import org.w3c.dom.Document;
-import org.w3c.dom.NodeList;
-import org.w3c.dom.Node;
-import org.w3c.dom.Element;
+import org.xml.sax.Attributes;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.DefaultHandler;
+import javax.xml.parsers.SAXParser;
+import javax.xml.parsers.SAXParserFactory;
 import java.io.File;
 import java.util.Scanner;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.Stack;
 
 public class XMLReader {
+    private static Set<String> selectedFields;
+    private static boolean isFirstRecord = true;
+    private static StringBuilder jsonOutput = new StringBuilder();
+    private static Stack<String> elementStack = new Stack<>();
+    private static StringBuilder currentValue = new StringBuilder();
+
     public static void main(String[] args) {
         try {
             // Validate XML file exists
@@ -19,63 +25,62 @@ public class XMLReader {
                 return;
             }
 
-            // Parse XML with error handling
-            Document doc;
-            try {
-                DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
-                DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
-                doc = dBuilder.parse(inputFile);
-                doc.getDocumentElement().normalize();
-            } catch (Exception e) {
-                System.err.println("Error parsing XML file: " + e.getMessage());
-                return;
-            }
-
-            // Get available fields with validation
-            Set<String> availableFields = getAvailableFields(doc);
+            // First parse to get available fields
+            Set<String> availableFields = getAvailableFields(inputFile);
             if (availableFields.isEmpty()) {
                 System.err.println("Error: No valid fields found in XML.");
                 return;
             }
 
             // Get user input with validation
-            Set<String> selectedFields = getUserSelectedFields(availableFields);
+            selectedFields = getUserSelectedFields(availableFields);
 
-            // Convert to JSON
-            convertToJson(doc, selectedFields);
+            // Initialize JSON output
+            jsonOutput.append("[\n");
+
+            // Parse with SAX
+            parseXMLWithSAX(inputFile);
+
+            // Complete JSON output
+            jsonOutput.append("]");
+            System.out.println(jsonOutput.toString());
 
         } catch (Exception e) {
             System.err.println("Unexpected error: " + e.getMessage());
         }
     }
 
-    private static Set<String> getAvailableFields(Document doc) {
+    private static Set<String> getAvailableFields(File inputFile) throws Exception {
         Set<String> fields = new LinkedHashSet<>();
-        try {
-            NodeList firstRecord = doc.getElementsByTagName("record");
-            if (firstRecord.getLength() > 0) {
-                Node recordNode = firstRecord.item(0);
-                if (recordNode.getNodeType() == Node.ELEMENT_NODE) {
-                    Element recordElement = (Element) recordNode;
-                    NodeList childNodes = recordElement.getChildNodes();
-                    
-                    for (int i = 0; i < childNodes.getLength(); i++) {
-                        Node childNode = childNodes.item(i);
-                        if (childNode.getNodeType() == Node.ELEMENT_NODE) {
-                            fields.add(childNode.getNodeName());
-                        }
-                    }
+        SAXParserFactory factory = SAXParserFactory.newInstance();
+        SAXParser saxParser = factory.newSAXParser();
+
+        DefaultHandler handler = new DefaultHandler() {
+            private boolean firstRecordProcessed = false;
+
+            public void startElement(String uri, String localName, String qName, Attributes attributes) {
+                if (qName.equalsIgnoreCase("record") && !firstRecordProcessed) {
+                    firstRecordProcessed = true;
                 }
             }
-        } catch (Exception e) {
-            System.err.println("Warning: Error reading fields from XML - " + e.getMessage());
-        }
+
+            public void endElement(String uri, String localName, String qName) {
+                if (firstRecordProcessed && !qName.equalsIgnoreCase("record")) {
+                    fields.add(qName);
+                }
+                if (qName.equalsIgnoreCase("record")) {
+                    firstRecordProcessed = false; // Stop after first record
+                }
+            }
+        };
+
+        saxParser.parse(inputFile, handler);
         return fields;
     }
 
     private static Set<String> getUserSelectedFields(Set<String> availableFields) {
         Scanner scanner = new Scanner(System.in);
-        Set<String> selectedFields = new LinkedHashSet<>();
+        Set<String> selected = new LinkedHashSet<>();
         
         while (true) {
             try {
@@ -104,7 +109,7 @@ public class XMLReader {
                     boolean found = false;
                     for (String availableField : availableFields) {
                         if (availableField.equalsIgnoreCase(field)) {
-                            selectedFields.add(availableField);
+                            selected.add(availableField);
                             found = true;
                             validSelection = true;
                             break;
@@ -126,66 +131,67 @@ public class XMLReader {
             }
         }
         
-        return selectedFields;
+        return selected;
     }
 
-    private static void convertToJson(Document doc, Set<String> selectedFields) {
-        try {
-            NodeList recordList = doc.getElementsByTagName("record");
-            if (recordList.getLength() == 0) {
-                System.out.println("[]");
-                return;
-            }
-            
-            System.out.println("[");
-            
-            for (int i = 0; i < recordList.getLength(); i++) {
-                Node recordNode = recordList.item(i);
-                
-                if (recordNode.getNodeType() == Node.ELEMENT_NODE) {
-                    Element recordElement = (Element) recordNode;
-                    
-                    System.out.println("  {");
-                    
-                    boolean firstField = true;
-                    for (String field : selectedFields) {
-                        if (!firstField) {
-                            System.out.println(",");
-                        }
-                        String value = getSafeElementValue(recordElement, field);
-                        System.out.print("    \"" + escapeJson(field) + "\": " + formatJsonValue(value));
-                        firstField = false;
+    private static void parseXMLWithSAX(File inputFile) throws Exception {
+        SAXParserFactory factory = SAXParserFactory.newInstance();
+        SAXParser saxParser = factory.newSAXParser();
+
+        DefaultHandler handler = new DefaultHandler() {
+            private boolean inSelectedField = false;
+            private String currentField = null;
+            private boolean inRecord = false;
+            private boolean recordHasData = false;
+
+            public void startElement(String uri, String localName, String qName, Attributes attributes) {
+                elementStack.push(qName);
+                currentValue.setLength(0);
+
+                if (qName.equalsIgnoreCase("record")) {
+                    if (isFirstRecord) {
+                        isFirstRecord = false;
+                    } else if (recordHasData) {
+                        jsonOutput.append(",\n");
                     }
-                    
-                    System.out.println();
-                    System.out.print("  }");
-                    
-                    if (i < recordList.getLength() - 1) {
-                        System.out.println(",");
-                    } else {
-                        System.out.println();
-                    }
+                    jsonOutput.append("  {\n");
+                    inRecord = true;
+                    recordHasData = false;
+                } else if (inRecord && selectedFields.contains(qName)) {
+                    inSelectedField = true;
+                    currentField = qName;
                 }
             }
-            
-            System.out.println("]");
-            
-        } catch (Exception e) {
-            System.err.println("Error generating JSON: " + e.getMessage());
-        }
-    }
 
-    private static String getSafeElementValue(Element parentElement, String elementName) {
-        try {
-            NodeList nodeList = parentElement.getElementsByTagName(elementName);
-            if (nodeList.getLength() > 0) {
-                Node node = nodeList.item(0);
-                return node.getTextContent();
+            public void characters(char[] ch, int start, int length) {
+                if (inSelectedField) {
+                    currentValue.append(ch, start, length);
+                }
             }
-            return "";
-        } catch (Exception e) {
-            return "";
-        }
+
+            public void endElement(String uri, String localName, String qName) {
+                if (inRecord && selectedFields.contains(qName) && currentValue.length() > 0) {
+                    if (recordHasData) {
+                        jsonOutput.append(",\n");
+                    }
+                    String value = currentValue.toString().trim();
+                    jsonOutput.append("    \"").append(escapeJson(qName)).append("\": ")
+                              .append(formatJsonValue(value));
+                    recordHasData = true;
+                }
+
+                if (qName.equalsIgnoreCase("record") && inRecord) {
+                    jsonOutput.append("\n  }");
+                    inRecord = false;
+                }
+
+                elementStack.pop();
+                inSelectedField = false;
+                currentField = null;
+            }
+        };
+
+        saxParser.parse(inputFile, handler);
     }
 
     private static String formatJsonValue(String value) {
