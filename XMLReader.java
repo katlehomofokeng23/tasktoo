@@ -8,6 +8,7 @@ import java.io.File;
 import java.util.Scanner;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.LinkedHashSet;
 
 public class XMLReader {
     public static void main(String[] args) {
@@ -32,9 +33,8 @@ public class XMLReader {
             // Get all record elements
             NodeList recordList = doc.getElementsByTagName("record");
             
-            System.out.println("\nTotal records: " + recordList.getLength());
-            System.out.println("Selected fields: " + String.join(", ", selectedFields));
-            System.out.println("----------------------------------------");
+            // Start JSON output
+            System.out.println("[");
             
             // Iterate through each record
             for (int i = 0; i < recordList.getLength(); i++) {
@@ -43,17 +43,36 @@ public class XMLReader {
                 if (recordNode.getNodeType() == Node.ELEMENT_NODE) {
                     Element recordElement = (Element) recordNode;
                     
-                    // Print record number
-                    System.out.println("Record #" + (i+1));
+                    // Start record JSON object
+                    System.out.println("  {");
                     
                     // Print selected fields
+                    boolean firstField = true;
                     for (String field : selectedFields) {
-                        System.out.println(field + ": " + getElementValue(recordElement, field));
+                        if (!firstField) {
+                            System.out.println(",");
+                        }
+                        String value = getElementValue(recordElement, field);
+                        System.out.print("    \"" + field + "\": " + formatJsonValue(value));
+                        firstField = false;
                     }
                     
-                    System.out.println("----------------------------------------");
+                    // End record JSON object
+                    System.out.println();
+                    System.out.print("  }");
+                    
+                    // Add comma unless it's the last record
+                    if (i < recordList.getLength() - 1) {
+                        System.out.println(",");
+                    } else {
+                        System.out.println();
+                    }
                 }
             }
+            
+            // End JSON output
+            System.out.println("]");
+            
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -61,7 +80,7 @@ public class XMLReader {
     
     // Get all available field names from the first record
     private static Set<String> getAvailableFields(Document doc) {
-        Set<String> fields = new HashSet<>();
+        Set<String> fields = new LinkedHashSet<>(); // Maintain insertion order
         NodeList firstRecord = doc.getElementsByTagName("record");
         
         if (firstRecord.getLength() > 0) {
@@ -84,7 +103,7 @@ public class XMLReader {
     // Get user input for field selection
     private static Set<String> getUserSelectedFields(Set<String> availableFields) {
         Scanner scanner = new Scanner(System.in);
-        Set<String> selectedFields = new HashSet<>();
+        Set<String> selectedFields = new LinkedHashSet<>(); // Maintain insertion order
         
         System.out.println("Available fields: " + String.join(", ", availableFields));
         System.out.println("Enter the fields you want to display (comma separated):");
@@ -122,5 +141,28 @@ public class XMLReader {
             return node.getTextContent();
         }
         return ""; // Return empty string if element not found
+    }
+    
+    // Format value for JSON output (handle strings, numbers, and empty lists)
+    private static String formatJsonValue(String value) {
+        if (value.isEmpty()) {
+            return "null";
+        }
+        
+        // Check if it's a list of numbers
+        if (value.matches("^\\s*\\d+(\\s*,\\s*\\d+)*\\s*$")) {
+            return "[" + value + "]";
+        }
+        
+        // Escape special JSON characters in strings
+        value = value.replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\b", "\\b")
+                    .replace("\f", "\\f")
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+                    .replace("\t", "\\t");
+        
+        return "\"" + value + "\"";
     }
 }
